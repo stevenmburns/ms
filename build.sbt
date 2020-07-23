@@ -17,7 +17,7 @@
  * under the License.
  */
 
-name := "building_blocks"
+name := "ms"
 version := "0.1.0-SNAPSHOT"
 organization := "com.intel"
 

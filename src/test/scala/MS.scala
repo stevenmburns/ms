@@ -1,6 +1,7 @@
-package building_blocks
+package ms
 
 import org.scalatest.{ Matchers, FlatSpec, GivenWhenThen}
+import org.scalatest.prop.Checkers
 
 import chisel3._
 import chisel3.util._
@@ -18,7 +19,7 @@ class rsp_packet extends Bundle {
 
 
 class addr_gen extends Module {
-  val max_cnt = 7.U
+  val max_cnt = 3.U
   val io = IO(new Bundle {
     val start = Input( Bool())
     val done = Output( Bool())
@@ -57,33 +58,41 @@ class MS extends Module {
 class addr_gen_Tester( tag: String, factory: () => addr_gen) extends GenericTest {
   behavior of s"$tag"
   it should "compile and execute without expect violations" in {
-    chisel3.iotesters.Driver.execute( factory, optionsManager) { c =>
+    check(chisel3.iotesters.Driver.execute( factory, optionsManager) { c =>
        new PeekPokeTester(c) {
          poke( c.io.start, 0)
          poke( c.io.addr.ready, 1)
+         expect( c.io.done, 0)
          step( 1)
          poke( c.io.start, 1)
          expect( c.io.addr.valid, 1)
          expect( c.io.addr.bits, 0)
+         expect( c.io.done, 0)
          step( 1)
          expect( c.io.addr.valid, 1)
          expect( c.io.addr.bits, 1)
+         expect( c.io.done, 0)
          step( 1)
          poke( c.io.addr.ready, 0)
          expect( c.io.addr.valid, 0)
+         expect( c.io.done, 0)
          step( 1)
+         poke( c.io.addr.ready, 1)
+         expect( c.io.addr.valid, 1)
+         expect( c.io.addr.bits, 2)
+         expect( c.io.done, 1)
        }
-    }
+    })
   }
 }
 
 class MSTester( tag: String, factory: () => MS) extends GenericTest {
   behavior of s"$tag"
   it should "compile and execute without expect violations" in {
-    chisel3.iotesters.Driver.execute( factory, optionsManager) { c =>
+    check(chisel3.iotesters.Driver.execute( factory, optionsManager) { c =>
        new PeekPokeTester(c) {
        }
-    }
+    })
   }
 }
 
