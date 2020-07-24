@@ -17,10 +17,10 @@ class GenericTest extends ChiselFlatSpec with Checkers {
 //      backendName="treadle",
 //      backendName="verilator",
       backendName="vcs",
-      isVerbose=true,
+
+//    vcsCommandEdits = """s/\+vcs\+initreg\+random //""",
       moreVcsFlags=extra,
-      vcsCommandEdits =
-        """s/\+vcs\+initreg\+random //"""
+      isVerbose=true
     )
   }
 }
