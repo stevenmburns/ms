@@ -135,12 +135,7 @@ object toDecoupledIO {
 class TagGenerator( p: MS_params = MS_params()) extends TagGeneratorIfc(p) {
   val cg = Module(new CountGenerator(p))
   val arb = Module( new RRArbiter( UInt(), 2))
-
-  val decoupled = Wire(io.tag_out.cloneType)
-  arb.io.in(0) <> Queue( decoupled, tags, pipe=false, flow=false)
-  decoupled.valid := io.tag_inp.valid
-  decoupled.bits := io.tag_inp.bits
-  assert( ~io.tag_inp.valid || decoupled.ready)
+  arb.io.in(0) <> Queue( toDecoupledIO(io.tag_inp.valid), tags, pipe=false, flow=false)
   arb.io.in(1) <> cg.io.count_out
   io.tag_out <> arb.io.out
 }
