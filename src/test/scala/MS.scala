@@ -7,143 +7,131 @@ import chisel3._
 import chisel3.util._
 import chisel3.iotesters._
 
-class MS_params {
-  val cacheline_addr_bits = 32
-  val log2banks = 2
-  val banks = 1 << log2banks
-  val BLOCKIN = 16
-  val sram_bits = 18 // addresses in units of BLOCKIN bytes
-  val addr_bits = sram_bits - log2banks
-  val word_bits = BLOCKIN*8
-}
-
-object MS_params {
-  def apply(): MS_params = new MS_params
-}
-
-class meta_data( val p: MS_params) extends Bundle {
-  val sram_wr_addr = UInt(p.sram_bits.W)
-  val wmask = Vec(p.banks,Bool())
-}
-
-class req_packet( val p: MS_params) extends Bundle {
-  val addr = UInt(p.cacheline_addr_bits.W)
-  val meta = new meta_data(p)
-}
-
-class rsp_packet( val p: MS_params) extends Bundle {
-  val data = Vec(p.banks, UInt(p.word_bits.W))
-  val meta = new meta_data(p)
-}
-
-
-class addr_gen( val p: MS_params = MS_params()) extends Module {
-  val max_cnt = 32.U
-  val io = IO(new Bundle {
-    val start = Input( Bool())
-    val done = Output( Bool())
-    val ld_req = DecoupledIO( new req_packet(p))
-  })
- 
-  val running = RegInit( init=false.B)
-  when ( io.start) {
-    running := true.B
-  }
-
-  val cnt = RegInit( io.ld_req.bits.addr.cloneType, init=0.U)
-
-  io.done := false.B
-
-  io.ld_req.noenq
-  when ( (running || io.start) && io.ld_req.ready) {
-    val pkt = Wire(new req_packet(p))
-    pkt.addr := cnt
-    pkt.meta.sram_wr_addr := cnt << p.log2banks
-    pkt.meta.wmask := VecInit( IndexedSeq.fill( p.banks){ true.B})
-    io.ld_req.enq( pkt)
-    when ( cnt === max_cnt - 1.U) {
-      running := false.B
-      io.done := true.B
-      cnt := 0.U
-    } .otherwise {
-      cnt := cnt + 1.U
-    }
-  }
-}
-
-class MS( val p: MS_params = MS_params()) extends Module {
-  val io = IO(new Bundle {
-    val start = Input( Bool())
-    val done = Output( Bool())
-    val ld_req = DecoupledIO( new req_packet( p))
-    val ld_rsp = Input(ValidIO( new rsp_packet( p)))
-
-    val sram_rd_addr = Input(UInt(p.sram_bits.W))
-    val sram_rd_en = Input(Bool())
-    val sram_rd_data = Output(UInt(p.word_bits.W))
-  })
-
-  val ag = Module( new addr_gen(p))
-  val sp = Module( new ScratchPad(p))
-
-  sp.io.sram_rd_addr := io.sram_rd_addr
-  sp.io.sram_rd_en := io.sram_rd_en
-  io.sram_rd_data := sp.io.sram_rd_data
-
-  val sIdle #:: sRunning #:: sWaiting #:: _ = Stream.from(0).map {_.U(2.W)}
-
-  val s = RegInit( init=sIdle)
-
-  val inflight = RegInit( init=0.U(8.W))
-  when ( !io.ld_req.fire() && io.ld_rsp.valid) {
-    inflight := inflight - 1.U
-  } .elsewhen( io.ld_req.fire() && !io.ld_rsp.valid) {
-    inflight := inflight + 1.U
-  }
-
-  ag.io.start := io.start
-  io.ld_req <> ag.io.ld_req
-  io.ld_rsp <> sp.io.resp
-
-  io.done := false.B
-  when        ( s === sIdle    && io.start) {
-    s := sRunning
-  } .elsewhen ( s === sRunning && ag.io.done) {
-    s := sWaiting
-  } .elsewhen ( s === sWaiting && inflight === 0.U) {
-    io.done := true.B
-    s := sIdle
-  }
-
-}
-
-
 class addr_gen_Tester( tag: String, factory: () => addr_gen) extends GenericTest {
   behavior of s"$tag"
   it should "compile and execute without expect violations" in {
     check(chisel3.iotesters.Driver.execute( factory, optionsManager) { c =>
        new PeekPokeTester(c) {
+         var addr = 0
+         var rdy = false
+
          poke( c.io.start, 0)
-         poke( c.io.ld_req.ready, 1)
-         expect( c.io.done, 0)
-         step( 1)
+         poke( c.io.ld_req.ready, false)
+         step(1)
+
          poke( c.io.start, 1)
-         expect( c.io.ld_req.valid, 1)
-         expect( c.io.ld_req.bits.addr, 0)
-         expect( c.io.done, 0)
-         step( 1)
-         expect( c.io.ld_req.valid, 1)
-         expect( c.io.ld_req.bits.addr, 1)
-         expect( c.io.done, 0)
-         step( 1)
-         poke( c.io.ld_req.ready, 0)
-         expect( c.io.ld_req.valid, 0)
-         expect( c.io.done, 0)
-         step( 1)
-         poke( c.io.ld_req.ready, 1)
-         expect( c.io.ld_req.valid, 1)
-         expect( c.io.ld_req.bits.addr, 2)
-         expect( c.io.done, 1)
+
+
+         while ( peek(c.io.done) == 0 && t < 1000) {
+           rdy = rdy || (rnd.nextInt( 8) < 7)
+           poke( c.io.ld_req.ready, rdy)
+
+           if ( rdy && peek( c.io.ld_req.valid) == 1) {
+             rdy = false
+             expect( c.io.ld_req.bits.addr, addr)
+             addr += 1
+           }
+           step(1)
+           poke( c.io.start, 0)
+         }
+       }
+    })
+  }
+}
+
+class CountGenerator_Tester( tag: String, factory: () => CountGenerator) extends GenericTest {
+  behavior of s"$tag"
+  it should "compile and execute without expect violations" in {
+    check(chisel3.iotesters.Driver.execute( factory, optionsManager) { c =>
+       new PeekPokeTester(c) {
+         var count = 0
+         var rdy = false
+
+         while ( count < c.tags && t < 1000) {
+           rdy = rdy || (rnd.nextInt( 8) < 7)
+           poke( c.io.count_out.ready, rdy)
+           if ( rdy) {
+             expect( c.io.count_out.valid, 1)
+             rdy = false
+             expect( c.io.count_out.bits, count)
+             count += 1
+           }
+           step(1)
+         }
+         poke( c.io.count_out.ready, 1)
+         expect( c.io.count_out.valid, 0)
+         step(1)
+       }
+    })
+  }
+}
+
+class TagGenerator_Tester( tag: String, factory: () => TagGeneratorIfc) extends GenericTest {
+  behavior of s"$tag"
+  it should "compile and execute without expect violations" in {
+    check(chisel3.iotesters.Driver.execute( factory, optionsManager) { c =>
+       new PeekPokeTester(c) {
+
+         val available_tags = scala.collection.mutable.Set.empty[BigInt]
+         for { t <- 0 until c.tags} {
+           available_tags += t
+         }
+
+         case class Pair( val timeout : Long, val tag_value : BigInt) {}
+         val pq = scala.collection.mutable.PriorityQueue.empty[Pair](Ordering.by((_: Pair).timeout).reverse)
+
+         var rdy = false
+         var used_tags = 0
+
+         def logical_step() {
+           println( s"${used_tags} ${available_tags} ${pq}")
+           poke( c.io.tag_inp.valid, 0)
+           for { h <- pq.headOption} {
+             println( s"${h} ${t}")
+             if ( h.timeout < t) {
+               poke( c.io.tag_inp.valid, 1)
+               poke( c.io.tag_inp.bits, h.tag_value)
+               expect( !(available_tags contains h.tag_value), s"${h.tag_value} should not be in available_tags")
+               available_tags += h.tag_value
+               used_tags -= 1
+               pq.dequeue
+             }
+           }
+
+           if ( rdy && peek( c.io.tag_out.valid) == 1) {
+             rdy = false
+             val lb = 48
+             val ub = 96
+             val dt = rnd.nextInt( ub-lb+1) + lb
+             val tag_value = peek( c.io.tag_out.bits)
+             println( s"Sending ${tag_value}")
+             pq += Pair(t+dt, tag_value)
+             expect( available_tags contains tag_value, s"${tag_value} in available_tags")
+             available_tags -= tag_value
+             used_tags += 1
+           }
+           step(1)
+         }
+
+         while ( t < 1000) {
+           rdy = rdy || (used_tags < c.tags && (rnd.nextInt( 8) < 7))
+           poke( c.io.tag_out.ready, rdy)
+           logical_step()
+         }
+
+       }
+    })
+  }
+}
+
+class MetadataCompress_Tester( tag: String, factory: () => MetadataCompress) extends GenericTest {
+  behavior of s"$tag"
+  it should "compile and execute without expect violations" in {
+    check(chisel3.iotesters.Driver.execute( factory, optionsManager) { c =>
+       new PeekPokeTester(c) {
+         poke( c.io.ld_req_inp.valid, 0)
+         poke( c.io.ld_rsp_inp.valid, 0)
+         step(1)
        }
     })
   }
@@ -234,6 +222,12 @@ class MS_Tester( tag: String, factory: () => MS) extends GenericTest {
 }
 
 class addr_gen_Test extends addr_gen_Tester( "addr_gen", () => new addr_gen)
+
+class CountGenerator_Test extends CountGenerator_Tester( "CountGenerator", () => new CountGenerator)
+
+class TagGenerator_Test extends TagGenerator_Tester( "TagGenerator", () => new TagGenerator)
+class TagGenerator2_Test extends TagGenerator_Tester( "TagGenerator2", () => new TagGenerator2)
+class MetadataCompress_Test extends MetadataCompress_Tester( "MetadataCompress", () => new MetadataCompress)
 
 class MS_Test extends MS_Tester( "MS", () => new MS)
 
