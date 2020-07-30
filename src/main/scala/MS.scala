@@ -20,9 +20,15 @@ object MS_params {
   def apply(): MS_params = new MS_params
 }
 
+case class meta_data_literal( val sram_wr_addr: BigInt, val wmask : IndexedSeq[BigInt]) {}
+
 class meta_data( val p: MS_params) extends Bundle {
   val sram_wr_addr = UInt(p.sram_bits.W)
   val wmask = Vec(p.banks,Bool())
+}
+
+class meta_data_small( val p: MS_params) extends Bundle {
+  val tag = UInt(p.tag_bits.W)
 }
 
 class req_packet( val p: MS_params) extends Bundle {
@@ -32,7 +38,7 @@ class req_packet( val p: MS_params) extends Bundle {
 
 class req_packet_small( val p: MS_params) extends Bundle {
   val addr = UInt(p.cacheline_addr_bits.W)
-  val tag = UInt(p.tag_bits.W)
+  val meta = new meta_data_small(p)
 }
 
 class rsp_packet( val p: MS_params) extends Bundle {
@@ -42,12 +48,12 @@ class rsp_packet( val p: MS_params) extends Bundle {
 
 class rsp_packet_small( val p: MS_params) extends Bundle {
   val data = Vec(p.banks, UInt(p.word_bits.W))
-  val tag = UInt(p.tag_bits.W)
+  val meta = new meta_data_small(p)
 }
 
 
 class addr_gen( val p: MS_params = MS_params()) extends Module {
-  val max_cnt = 32.U
+  val max_cnt = 32
   val io = IO(new Bundle {
     val start = Input( Bool())
     val done = Output( Bool())
@@ -71,7 +77,7 @@ class addr_gen( val p: MS_params = MS_params()) extends Module {
     pkt.meta.wmask := VecInit( IndexedSeq.fill( p.banks){ true.B})
     io.ld_req.enq( pkt) // helpful interface
     when ( io.ld_req.ready) {
-      when ( cnt === max_cnt - 1.U) {
+      when ( cnt === (max_cnt-1).U) {
         running := false.B
         io.done := true.B
         cnt := 0.U
@@ -171,24 +177,25 @@ class MetadataCompress( val p : MS_params = MS_params()) extends Module {
   io.ld_req_out.noenq
 
   tg.io.tag_out.nodeq
-  when ( tg.io.tag_out.valid && io.ld_req_inp.valid && io.ld_req_out.ready) {
-    val tag = tg.io.tag_out.deq()
-    val req = io.ld_req_inp.deq()
-    io.ld_req_out.valid := true.B
-    io.ld_req_out.bits.addr := req.addr
-    io.ld_req_out.bits.tag := tag
-    m.write( tag, req.meta)
+  // Make sure a tag is available and there is no backpressure
+  when ( tg.io.tag_out.valid && io.ld_req_out.ready) {
+    io.ld_req_inp.ready := true.B
+    when ( io.ld_req_inp.valid) {
+      val tag = tg.io.tag_out.deq()
+      val req = io.ld_req_inp.bits
+      io.ld_req_out.valid := true.B
+      io.ld_req_out.bits.addr := req.addr
+      io.ld_req_out.bits.meta.tag := tag
+      m.write( tag, req.meta)
+    }
   }
 
   tg.io.tag_inp.valid := io.ld_rsp_inp.valid
-  tg.io.tag_inp.bits := io.ld_rsp_inp.bits.tag
+  tg.io.tag_inp.bits := io.ld_rsp_inp.bits.meta.tag
   io.ld_rsp_out.valid := RegNext( io.ld_rsp_inp.valid, init=false.B)
   io.ld_rsp_out.bits.data := RegNext( io.ld_rsp_inp.bits.data)
-  io.ld_rsp_out.bits.meta := m.read(io.ld_rsp_inp.bits.tag, io.ld_rsp_inp.valid)
+  io.ld_rsp_out.bits.meta := m.read(io.ld_rsp_inp.bits.meta.tag, io.ld_rsp_inp.valid)
 }
-
-
-
 
 class MS( val p: MS_params = MS_params()) extends Module {
   val io = IO(new Bundle {
@@ -223,6 +230,57 @@ class MS( val p: MS_params = MS_params()) extends Module {
   ag.io.start := io.start
   io.ld_req <> ag.io.ld_req
   io.ld_rsp <> sp.io.resp
+
+  io.done := false.B
+  when        ( s === sIdle    && io.start) {
+    s := sRunning
+  } .elsewhen ( s === sRunning && ag.io.done) {
+    s := sWaiting
+  } .elsewhen ( s === sWaiting && inflight === 0.U) {
+    io.done := true.B
+    s := sIdle
+  }
+
+}
+
+class MS_small( val p: MS_params = MS_params()) extends Module {
+  val io = IO(new Bundle {
+    val start = Input( Bool())
+    val done = Output( Bool())
+    val ld_req = DecoupledIO( new req_packet_small( p))
+    val ld_rsp = Input(ValidIO( new rsp_packet_small( p)))
+
+    val sram_rd_addr = Input(UInt(p.sram_bits.W))
+    val sram_rd_en = Input(Bool())
+    val sram_rd_data = Output(UInt(p.word_bits.W))
+  })
+
+  val ag = Module( new addr_gen(p))
+  val sp = Module( new ScratchPad(p))
+
+  sp.io.sram_rd_addr := io.sram_rd_addr
+  sp.io.sram_rd_en := io.sram_rd_en
+  io.sram_rd_data := sp.io.sram_rd_data
+
+  val sIdle #:: sRunning #:: sWaiting #:: _ = Stream.from(0).map {_.U(2.W)}
+
+  val s = RegInit( init=sIdle)
+
+  val inflight = RegInit( init=0.U(8.W))
+  when ( !io.ld_req.fire() && io.ld_rsp.valid) {
+    inflight := inflight - 1.U
+  } .elsewhen( io.ld_req.fire() && !io.ld_rsp.valid) {
+    inflight := inflight + 1.U
+  }
+
+  val mc = Module( new MetadataCompress(p))
+
+  io.ld_req <> mc.io.ld_req_out
+  io.ld_rsp <> mc.io.ld_rsp_inp
+
+  ag.io.start := io.start
+  mc.io.ld_req_inp <> ag.io.ld_req
+  mc.io.ld_rsp_out <> sp.io.resp
 
   io.done := false.B
   when        ( s === sIdle    && io.start) {

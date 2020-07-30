@@ -131,13 +131,50 @@ class MetadataCompress_Tester( tag: String, factory: () => MetadataCompress) ext
        new PeekPokeTester(c) {
          poke( c.io.ld_req_inp.valid, 0)
          poke( c.io.ld_rsp_inp.valid, 0)
+
+         poke( c.io.ld_req_out.ready, 1)
+
+         expect( c.io.ld_req_inp.ready, 1)
          step(1)
+         poke( c.io.ld_req_inp.valid, 1)
+         poke( c.io.ld_req_inp.bits.addr, 0)
+         poke( c.io.ld_req_inp.bits.meta.sram_wr_addr, 0)
+         poke( c.io.ld_req_inp.bits.meta.wmask(0), 1)
+         poke( c.io.ld_req_inp.bits.meta.wmask(1), 1)
+         poke( c.io.ld_req_inp.bits.meta.wmask(2), 1)
+         poke( c.io.ld_req_inp.bits.meta.wmask(3), 1)
+
+         expect( c.io.ld_req_out.valid, 1)
+         expect( c.io.ld_req_out.bits.addr, 0)
+         expect( c.io.ld_req_out.bits.meta.tag, 0)
+         step(1)
+         poke( c.io.ld_req_inp.valid, 1)
+         poke( c.io.ld_req_inp.bits.addr, 0)
+         poke( c.io.ld_req_inp.bits.meta.sram_wr_addr, 0)
+         poke( c.io.ld_req_inp.bits.meta.wmask, IndexedSeq.fill(4){ BigInt(1)})
+
+         expect( c.io.ld_req_out.valid, 1)
+         expect( c.io.ld_req_out.bits.addr, 0)
+         expect( c.io.ld_req_out.bits.meta.tag, 1)
+         step(1)
+         poke( c.io.ld_req_inp.valid, 0)
+
+         poke( c.io.ld_rsp_inp.valid, 1)
+         poke( c.io.ld_rsp_inp.bits.data, IndexedSeq.fill(4){BigInt(0)})
+         poke( c.io.ld_rsp_inp.bits.meta.tag, 1)
+
+         expect( c.io.ld_rsp_out.valid, 0)
+         step(1)
+         expect( c.io.ld_rsp_out.valid, 1)
+         expect( c.io.ld_rsp_out.bits.data, IndexedSeq.fill(4){BigInt(0)})
+         expect( c.io.ld_rsp_out.bits.meta.sram_wr_addr, 0)
+         expect( c.io.ld_rsp_out.bits.meta.wmask, IndexedSeq.fill(4){ BigInt(1)})
        }
     })
   }
 }
 
-case class MO( val timeout: Int, val data: IndexedSeq[BigInt], val sram_wr_addr: BigInt, val wmask: IndexedSeq[Boolean])
+case class MO( val timeout: Int, val data: IndexedSeq[BigInt], val sram_wr_addr: BigInt, val wmask: Seq[BigInt])
 
 class MS_Tester( tag: String, factory: () => MS) extends GenericTest {
   behavior of s"$tag"
@@ -158,8 +195,9 @@ class MS_Tester( tag: String, factory: () => MS) extends GenericTest {
                poke( c.io.ld_rsp.valid, 1)
                for { b <- 0 until c.p.banks} {
                  poke( c.io.ld_rsp.bits.data(b), h.data(b))
-                 poke( c.io.ld_rsp.bits.meta.wmask(b), if ( h.wmask(b)) 1 else 0)
-                 if ( h.wmask(b)) {
+                 poke( c.io.ld_rsp.bits.meta.wmask(b), h.wmask(b))
+
+                 if ( h.wmask(b) != 0) {
                    scratch_pad_model(h.sram_wr_addr + b) = h.data(b)
                  }
                }
@@ -173,7 +211,8 @@ class MS_Tester( tag: String, factory: () => MS) extends GenericTest {
              val dram_addr = peek( c.io.ld_req.bits.addr)
              val d = IndexedSeq.tabulate(4){ i => 4*dram_addr+i}
              val a = peek( c.io.ld_req.bits.meta.sram_wr_addr)
-             val m = IndexedSeq.tabulate(4){ i => peek( c.io.ld_req.bits.meta.wmask(i)) != 0}
+
+             val m = IndexedSeq.tabulate(4){ i => peek( c.io.ld_req.bits.meta.wmask(i)) }
              val lb = 10
              val ub = 30
              val dt = rnd.nextInt( ub-lb + 1) + lb
@@ -221,6 +260,175 @@ class MS_Tester( tag: String, factory: () => MS) extends GenericTest {
   }
 }
 
+class MS_Tester2( tag: String, factory: () => MS) extends GenericTest {
+  behavior of s"$tag"
+  it should "compile and execute without expect violations" in {
+    check(chisel3.iotesters.Driver.execute( factory, optionsManager) { c =>
+       new PeekPokeTester(c) {
+         val sram_to_observe = 128
+
+         val scratch_pad_model = scala.collection.mutable.Map[BigInt,BigInt]()
+
+         val pq = scala.collection.mutable.PriorityQueue.empty[MO](Ordering.by((_: MO).timeout).reverse)
+
+         def logical_step() {
+           poke( c.io.ld_rsp.valid, 0)
+           for { h <- pq.headOption} {
+             println( s"${h} ${pq} ${t}")
+             if ( h.timeout < t) {
+               poke( c.io.ld_rsp.valid, 1)
+               poke( c.io.ld_rsp.bits.meta.sram_wr_addr, h.sram_wr_addr)
+               for { b <- 0 until c.p.banks} {
+                 poke( c.io.ld_rsp.bits.meta.wmask(b), h.wmask(b))
+                 poke( c.io.ld_rsp.bits.data(b), h.data(b))
+
+               }
+               pq.dequeue
+             }
+           }
+
+           if ( peek( c.io.ld_req.valid) == 1) {
+             val dram_addr = peek( c.io.ld_req.bits.addr)
+             val d = IndexedSeq.tabulate(4){ i => 4*dram_addr+i}
+             val sram_wr_addr = peek( c.io.ld_req.bits.meta.sram_wr_addr)
+             val wmask = Seq.tabulate(4){ i => peek( c.io.ld_req.bits.meta.wmask(i)) }
+             val lb = 10
+             val ub = 30
+             val dt = rnd.nextInt( ub-lb + 1) + lb
+
+             pq += new MO( t+dt, d, sram_wr_addr, wmask)
+           }
+           step(1)
+         }
+
+         poke( c.io.start, 0)
+         poke( c.io.sram_rd_en, 0)
+         poke( c.io.ld_req.ready, 1)
+
+         /* Get the scratchpad state */
+         poke( c.io.sram_rd_en, 1)
+         for { idx <- 0 until sram_to_observe} {
+            poke( c.io.sram_rd_addr, idx)
+            scratch_pad_model(idx) = peek( c.io.sram_rd_data)
+            logical_step()
+         }
+         poke( c.io.sram_rd_en, 0)
+
+         def check_state() {
+           poke( c.io.sram_rd_en, 1)
+           for { idx <- 0 until sram_to_observe} {
+             poke( c.io.sram_rd_addr, idx)
+             expect( c.io.sram_rd_data, scratch_pad_model(idx))
+             logical_step()
+           }
+           poke( c.io.sram_rd_en, 0)
+         }
+         check_state
+
+         logical_step()
+         expect( c.io.done, 0)
+         poke( c.io.start, 1)
+         logical_step()
+         expect( c.io.done, 0)
+         poke( c.io.start, 0)
+         while ( t < 1000 && peek( c.io.done) == 0) {
+           logical_step()
+         }
+
+         for { i <- 0 until (c.ag.max_cnt << c.p.log2banks)} {
+           scratch_pad_model(i) = i
+         }
+         check_state
+       }
+    })
+  }
+}
+
+
+case class MO_small( val timeout: Int, val data: IndexedSeq[BigInt], val meta: BigInt)
+
+class MS_small_Tester( tag: String, factory: () => MS_small) extends GenericTest {
+  behavior of s"$tag"
+  it should "compile and execute without expect violations" in {
+    check(chisel3.iotesters.Driver.execute( factory, optionsManager) { c =>
+       new PeekPokeTester(c) {
+         val sram_to_observe = 128
+
+         val scratch_pad_model = scala.collection.mutable.Map[BigInt,BigInt]()
+
+         val pq = scala.collection.mutable.PriorityQueue.empty[MO_small](Ordering.by((_: MO_small).timeout).reverse)
+
+         def logical_step() {
+           poke( c.io.ld_rsp.valid, 0)
+           for { h <- pq.headOption} {
+             println( s"${h} ${pq} ${t}")
+             if ( h.timeout < t) {
+               poke( c.io.ld_rsp.valid, 1)
+               poke( c.io.ld_rsp.bits.meta.asUInt, h.meta)
+               for { b <- 0 until c.p.banks} {
+                 poke( c.io.ld_rsp.bits.data(b), h.data(b))
+
+               }
+               pq.dequeue
+             }
+           }
+
+           if ( peek( c.io.ld_req.valid) == 1) {
+             val dram_addr = peek( c.io.ld_req.bits.addr)
+             val d = IndexedSeq.tabulate(4){ i => 4*dram_addr+i}
+             val meta = peek( c.io.ld_req.bits.meta.asUInt)
+             val lb = 10
+             val ub = 30
+             val dt = rnd.nextInt( ub-lb + 1) + lb
+
+             pq += new MO_small( t+dt, d, meta)
+           }
+           step(1)
+         }
+
+         poke( c.io.start, 0)
+         poke( c.io.sram_rd_en, 0)
+         poke( c.io.ld_req.ready, 1)
+
+         /* Get the scratchpad state */
+         poke( c.io.sram_rd_en, 1)
+         for { idx <- 0 until sram_to_observe} {
+            poke( c.io.sram_rd_addr, idx)
+            scratch_pad_model(idx) = peek( c.io.sram_rd_data)
+            logical_step()
+         }
+         poke( c.io.sram_rd_en, 0)
+
+         def check_state() {
+           poke( c.io.sram_rd_en, 1)
+           for { idx <- 0 until sram_to_observe} {
+             poke( c.io.sram_rd_addr, idx)
+             expect( c.io.sram_rd_data, scratch_pad_model(idx))
+             logical_step()
+           }
+           poke( c.io.sram_rd_en, 0)
+         }
+         check_state
+
+         logical_step()
+         expect( c.io.done, 0)
+         poke( c.io.start, 1)
+         logical_step()
+         expect( c.io.done, 0)
+         poke( c.io.start, 0)
+         while ( t < 1000 && peek( c.io.done) == 0) {
+           logical_step()
+         }
+
+         for { i <- 0 until (c.ag.max_cnt << c.p.log2banks)} {
+           scratch_pad_model(i) = i
+         }
+         check_state
+       }
+    })
+  }
+}
+
 class addr_gen_Test extends addr_gen_Tester( "addr_gen", () => new addr_gen)
 
 class CountGenerator_Test extends CountGenerator_Tester( "CountGenerator", () => new CountGenerator)
@@ -230,4 +438,5 @@ class TagGenerator2_Test extends TagGenerator_Tester( "TagGenerator2", () => new
 class MetadataCompress_Test extends MetadataCompress_Tester( "MetadataCompress", () => new MetadataCompress)
 
 class MS_Test extends MS_Tester( "MS", () => new MS)
-
+class MS_Test2 extends MS_Tester2( "MS_Test2", () => new MS)
+class MS_small_Test extends MS_small_Tester( "MS_small", () => new MS_small)

@@ -62,10 +62,11 @@ resolvers ++= Seq(
 
 val defaultVersions = Map(
   "chisel3" -> "3.2.5",
-  "chisel-iotesters" -> "1.3.5"
+  "chisel-iotesters" -> "1.3.5",
+  "chiseltest" -> "0.2.1"
   )
 
-libraryDependencies ++= Seq("chisel3","chisel-iotesters").map {
+libraryDependencies ++= Seq("chisel3","chisel-iotesters","chiseltest").map {
   dep: String => "edu.berkeley.cs" %% dep % sys.props.getOrElse(dep + "Version", defaultVersions(dep)) }
 
 libraryDependencies ++= Seq(
