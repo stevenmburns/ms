@@ -61,9 +61,9 @@ resolvers ++= Seq(
   Resolver.sonatypeRepo("releases"))
 
 val defaultVersions = Map(
-  "chisel3" -> "3.2.5",
-  "chisel-iotesters" -> "1.3.5",
-  "chiseltest" -> "0.2.1"
+  "chisel3" -> "3.3.2",
+  "chisel-iotesters" -> "1.4.2",
+  "chiseltest" -> "0.2.2"
   )
 
 libraryDependencies ++= Seq("chisel3","chisel-iotesters","chiseltest").map {
