@@ -7,6 +7,8 @@ class MS_params {
   val cacheline_addr_bits = 32
   val log2banks = 2
   val banks = 1 << log2banks
+  val log2ports = 8
+  val ports = 1 << log2ports
   val BLOCKIN = 16
   val sram_bits = 18 // addresses in units of BLOCKIN bytes
   val addr_bits = sram_bits - log2banks
@@ -20,11 +22,12 @@ object MS_params {
   def apply(): MS_params = new MS_params
 }
 
-case class meta_data_literal( val sram_wr_addr: BigInt, val wmask : IndexedSeq[BigInt]) {}
+case class meta_data_literal( val sram_wr_addr: BigInt, val wmask : IndexedSeq[BigInt], val port_id: BigInt) {}
 
 class meta_data( val p: MS_params) extends Bundle {
   val sram_wr_addr = UInt(p.sram_bits.W)
   val wmask = Vec(p.banks,Bool())
+  val port_id = UInt(p.log2ports.W)
 }
 
 class meta_data_small( val p: MS_params) extends Bundle {
@@ -57,6 +60,7 @@ class addr_gen( val p: MS_params = MS_params()) extends Module {
   val io = IO(new Bundle {
     val start = Input( Bool())
     val done = Output( Bool())
+    val port_id = Input( UInt(p.log2ports.W))
     val ld_req = DecoupledIO( new req_packet(p))
   })
  
@@ -75,6 +79,7 @@ class addr_gen( val p: MS_params = MS_params()) extends Module {
     pkt.addr := cnt
     pkt.meta.sram_wr_addr := cnt << p.log2banks
     pkt.meta.wmask := VecInit( IndexedSeq.fill( p.banks){ true.B})
+    pkt.meta.port_id := io.port_id
     io.ld_req.enq( pkt) // helpful interface
     when ( io.ld_req.ready) {
       when ( cnt === (max_cnt-1).U) {
@@ -197,24 +202,30 @@ class MetadataCompress( val p : MS_params = MS_params()) extends Module {
   io.ld_rsp_out.bits.meta := m.read(io.ld_rsp_inp.bits.meta.tag, io.ld_rsp_inp.valid)
 }
 
+class ScratchPadRd( val p: MS_params = MS_params()) extends Bundle {
+  val addr = Input(UInt(p.sram_bits.W))
+  val en = Input(Bool())
+  val data = Output(UInt(p.word_bits.W))
+}
+
+//class Endpoint( val p: MS_params = MS_params()) extends Module {
+//}
+
 class MS( val p: MS_params = MS_params()) extends Module {
   val io = IO(new Bundle {
     val start = Input( Bool())
     val done = Output( Bool())
     val ld_req = DecoupledIO( new req_packet( p))
     val ld_rsp = Input(ValidIO( new rsp_packet( p)))
-
-    val sram_rd_addr = Input(UInt(p.sram_bits.W))
-    val sram_rd_en = Input(Bool())
-    val sram_rd_data = Output(UInt(p.word_bits.W))
+    val sram_rd = new ScratchPadRd(p)
   })
 
   val ag = Module( new addr_gen(p))
   val sp = Module( new ScratchPad(p))
 
-  sp.io.sram_rd_addr := io.sram_rd_addr
-  sp.io.sram_rd_en := io.sram_rd_en
-  io.sram_rd_data := sp.io.sram_rd_data
+  sp.io.sram_rd_addr := io.sram_rd.addr
+  sp.io.sram_rd_en := io.sram_rd.en
+  io.sram_rd.data := sp.io.sram_rd_data
 
   val sIdle #:: sRunning #:: sWaiting #:: _ = Stream.from(0).map {_.U(2.W)}
 
@@ -228,6 +239,7 @@ class MS( val p: MS_params = MS_params()) extends Module {
   }
 
   ag.io.start := io.start
+  ag.io.port_id := 0.U
   io.ld_req <> ag.io.ld_req
   io.ld_rsp <> sp.io.resp
 
@@ -250,17 +262,15 @@ class MS_small( val p: MS_params = MS_params()) extends Module {
     val ld_req = DecoupledIO( new req_packet_small( p))
     val ld_rsp = Input(ValidIO( new rsp_packet_small( p)))
 
-    val sram_rd_addr = Input(UInt(p.sram_bits.W))
-    val sram_rd_en = Input(Bool())
-    val sram_rd_data = Output(UInt(p.word_bits.W))
+    val sram_rd = new ScratchPadRd(p)
   })
 
   val ag = Module( new addr_gen(p))
   val sp = Module( new ScratchPad(p))
 
-  sp.io.sram_rd_addr := io.sram_rd_addr
-  sp.io.sram_rd_en := io.sram_rd_en
-  io.sram_rd_data := sp.io.sram_rd_data
+  sp.io.sram_rd_addr := io.sram_rd.addr
+  sp.io.sram_rd_en := io.sram_rd.en
+  io.sram_rd.data := sp.io.sram_rd_data
 
   val sIdle #:: sRunning #:: sWaiting #:: _ = Stream.from(0).map {_.U(2.W)}
 
@@ -279,6 +289,7 @@ class MS_small( val p: MS_params = MS_params()) extends Module {
   io.ld_rsp <> mc.io.ld_rsp_inp
 
   ag.io.start := io.start
+  ag.io.port_id := 0.U
   mc.io.ld_req_inp <> ag.io.ld_req
   mc.io.ld_rsp_out <> sp.io.resp
 
