@@ -223,26 +223,26 @@ class MS_Tester( tag: String, factory: () => MS) extends GenericTest {
          }
 
          poke( c.io.start, 0)
-         poke( c.io.sram_rd_en, 0)
+         poke( c.io.sram_rd.en, 0)
          poke( c.io.ld_req.ready, 1)
 
          /* Get the scratchpad state */
-         poke( c.io.sram_rd_en, 1)
+         poke( c.io.sram_rd.en, 1)
          for { idx <- 0 until sram_to_observe} {
-            poke( c.io.sram_rd_addr, idx)
-            scratch_pad_model(idx) = peek( c.io.sram_rd_data)
+            poke( c.io.sram_rd.addr, idx)
+            scratch_pad_model(idx) = peek( c.io.sram_rd.data)
             logical_step()
          }
-         poke( c.io.sram_rd_en, 0)
+         poke( c.io.sram_rd.en, 0)
 
          def check_state() {
-           poke( c.io.sram_rd_en, 1)
+           poke( c.io.sram_rd.en, 1)
            for { idx <- 0 until sram_to_observe} {
-             poke( c.io.sram_rd_addr, idx)
-             expect( c.io.sram_rd_data, scratch_pad_model(idx))
+             poke( c.io.sram_rd.addr, idx)
+             expect( c.io.sram_rd.data, scratch_pad_model(idx))
              logical_step()
            }
-           poke( c.io.sram_rd_en, 0)
+           poke( c.io.sram_rd.en, 0)
          }
 
          logical_step()
@@ -302,26 +302,26 @@ class MS_Tester2( tag: String, factory: () => MS) extends GenericTest {
          }
 
          poke( c.io.start, 0)
-         poke( c.io.sram_rd_en, 0)
+         poke( c.io.sram_rd.en, 0)
          poke( c.io.ld_req.ready, 1)
 
          /* Get the scratchpad state */
-         poke( c.io.sram_rd_en, 1)
+         poke( c.io.sram_rd.en, 1)
          for { idx <- 0 until sram_to_observe} {
-            poke( c.io.sram_rd_addr, idx)
-            scratch_pad_model(idx) = peek( c.io.sram_rd_data)
+            poke( c.io.sram_rd.addr, idx)
+            scratch_pad_model(idx) = peek( c.io.sram_rd.data)
             logical_step()
          }
-         poke( c.io.sram_rd_en, 0)
+         poke( c.io.sram_rd.en, 0)
 
          def check_state() {
-           poke( c.io.sram_rd_en, 1)
+           poke( c.io.sram_rd.en, 1)
            for { idx <- 0 until sram_to_observe} {
-             poke( c.io.sram_rd_addr, idx)
-             expect( c.io.sram_rd_data, scratch_pad_model(idx))
+             poke( c.io.sram_rd.addr, idx)
+             expect( c.io.sram_rd.data, scratch_pad_model(idx))
              logical_step()
            }
-           poke( c.io.sram_rd_en, 0)
+           poke( c.io.sram_rd.en, 0)
          }
          check_state
 
@@ -387,26 +387,26 @@ class MS_small_Tester( tag: String, factory: () => MS_small) extends GenericTest
          }
 
          poke( c.io.start, 0)
-         poke( c.io.sram_rd_en, 0)
+         poke( c.io.sram_rd.en, 0)
          poke( c.io.ld_req.ready, 1)
 
          /* Get the scratchpad state */
-         poke( c.io.sram_rd_en, 1)
+         poke( c.io.sram_rd.en, 1)
          for { idx <- 0 until sram_to_observe} {
-            poke( c.io.sram_rd_addr, idx)
-            scratch_pad_model(idx) = peek( c.io.sram_rd_data)
+            poke( c.io.sram_rd.addr, idx)
+            scratch_pad_model(idx) = peek( c.io.sram_rd.data)
             logical_step()
          }
-         poke( c.io.sram_rd_en, 0)
+         poke( c.io.sram_rd.en, 0)
 
          def check_state() {
-           poke( c.io.sram_rd_en, 1)
+           poke( c.io.sram_rd.en, 1)
            for { idx <- 0 until sram_to_observe} {
-             poke( c.io.sram_rd_addr, idx)
-             expect( c.io.sram_rd_data, scratch_pad_model(idx))
+             poke( c.io.sram_rd.addr, idx)
+             expect( c.io.sram_rd.data, scratch_pad_model(idx))
              logical_step()
            }
-           poke( c.io.sram_rd_en, 0)
+           poke( c.io.sram_rd.en, 0)
          }
          check_state
 
